@@ -21,15 +21,12 @@ LOGS_DIR = os.path.join(WORKSPACE_ROOT, "logs/decoder_pretrain")
 
 # 训练超参数
 MAX_LEN = 128
-BATCH_SIZE = 8  # 考虑到 4060 显存，设为 8 更稳妥
-LEARNING_RATE = 1e-4
+BATCH_SIZE = 32  # 4090 显存充足，调大 Batch Size 提升吞吐量
+LEARNING_RATE = 2e-4 # 随着 Batch Size 变大，学习率适当调高
 EPOCHS = 3
 SAVE_STEPS = 500
 LOGGING_STEPS = 100
 WEIGHT_DECAY = 0.01
-
-# 设备选择
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def get_decoder_model(vocab_size):
     config = GPT2Config(
@@ -47,12 +44,16 @@ def get_decoder_model(vocab_size):
 
 # ==================== 2. 训练主流程 ====================
 def main():
-    print(f"当前运行环境: {DEVICE}")
-    if DEVICE == "cuda":
-        print(f"检测到显卡: {torch.cuda.get_device_name(0)}")
+    # 获取分布式环境状态
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    is_main_process = local_rank in [-1, 0]
+
+    if is_main_process:
+        print(f"主进程启动。检测到 GPU 总数: {torch.cuda.device_count()}")
 
     # 1. 加载分词器
-    print(f"正在加载分词器: {TOKENIZER_PATH}")
+    if is_main_process:
+        print(f"正在加载分词器: {TOKENIZER_PATH}")
     # 使用 LlamaTokenizer 加载 SentencePiece 模型，并设置特殊 Token
     tokenizer = LlamaTokenizer(vocab_file=TOKENIZER_PATH)
     tokenizer.pad_token_id = 0
@@ -61,7 +62,8 @@ def main():
     vocab_size = len(tokenizer)
 
     # 2. 加载数据集
-    print(f"正在读取数据集 (千万级索引建立中，请耐心等候...): {TRAIN_DATA_PATH}")
+    if is_main_process:
+        print(f"正在读取数据集 (千万级索引建立中，请耐心等候...): {TRAIN_DATA_PATH}")
     
     import datasets
     # 彻底关闭数据集库的内部日志和进度条，防止干扰
@@ -76,22 +78,19 @@ def main():
     else:
         train_dataset = dataset
 
-    print(f"--- 磁盘映射完成！ ---")
-    print(f"样本总数: {len(train_dataset)}")
+    if is_main_process:
+        print(f"--- 磁盘映射完成！ ---")
+        print(f"样本总数: {len(train_dataset)}")
     
-    # 关键测试：取一条数据看响应时间
-    print("正在验证数据读取响应...")
-    _ = train_dataset[0]
-    print("数据读取正常。")
-
     # 3. 初始化模型
-    print("正在构建模型架构...")
+    if is_main_process:
+        print("正在构建模型架构...")
     model = get_decoder_model(vocab_size)
-    model.to(DEVICE)
-    print(f"模型已移至: {DEVICE}")
+    # 不再手动移至 DEVICE，由 Trainer 处理分布式分配
 
     # 4. 配置训练参数 (使用 SFTConfig 解决警告)
-    print("正在配置训练参数 (禁用冗余扫描)...")
+    if is_main_process:
+        print("正在配置训练参数...")
     training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
@@ -101,18 +100,20 @@ def main():
         save_total_limit=3,
         logging_steps=5,
         learning_rate=LEARNING_RATE,
-        fp16=torch.cuda.is_available(),
+        bf16=torch.cuda.is_bf16_supported(), # 4090 支持 BF16，提供更好的数值稳定性
+        tf32=True, # 4090 必开 TF32
         logging_dir=LOGS_DIR,
         report_to="none",
-        dataloader_num_workers=0,
+        dataloader_num_workers=4, # 4090 环境通常 CPU 核心也较多，开启多进程加速数据读取
         remove_unused_columns=False,
         group_by_length=False,
-        dataloader_pin_memory=False,
+        dataloader_pin_memory=True,
         full_determinism=False,
         # SFTConfig 特有参数
         max_seq_length=MAX_LEN,
         packing=True,
-        dataset_text_field="input_ids", # 即使 dataset_text_field 为 None，内部逻辑有时也需要指定
+        dataset_text_field="input_ids", 
+        ddp_find_unused_parameters=False,
     )
 
     # 5. 训练器
@@ -121,9 +122,11 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         tokenizer=tokenizer,             # 必须显式传入 tokenizer 解决 OSError
+        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False), # 动态生成 labels 并解决张量长度不一问题
     )
 
-    print("--- 准备就绪，即将开始训练。注意：由于数据量巨大，启动前会有 30-60 秒静默期 ---")
+    if is_main_process:
+        print("--- 准备就绪，即将开始训练。注意：由于数据量巨大，启动前会有 30-60 秒静默期 ---")
 
     
     # 断点续传逻辑
@@ -134,12 +137,15 @@ def main():
             try:
                 dirs.sort(key=lambda x: int(x.split("-")[-1]))
                 resume_from_checkpoint = os.path.join(OUTPUT_DIR, dirs[-1])
-                print(f"检测到历史存档，将从 {resume_from_checkpoint} 恢复训练...")
+                if is_main_process:
+                    print(f"检测到历史存档，将从 {resume_from_checkpoint} 恢复训练...")
             except: pass
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    trainer.save_model(os.path.join(OUTPUT_DIR, "final"))
-    print("训练全部完成！")
+    
+    if is_main_process:
+        trainer.save_model(os.path.join(OUTPUT_DIR, "final"))
+        print("训练全部完成！")
 
 if __name__ == "__main__":
     main()
