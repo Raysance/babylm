@@ -1,0 +1,4 @@
+*.parquet
+*.arrow
+*.txt
+__pycache__
