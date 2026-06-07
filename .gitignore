@@ -2,3 +2,5 @@
 *.arrow
 *.txt
 __pycache__
+*.safetensors
+*.pt

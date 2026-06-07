@@ -5,15 +5,16 @@ import sys
 import sentencepiece as spm
 from tqdm import tqdm
 from datasets import load_from_disk
-from transformers import Trainer, TrainingArguments, DataCollatorForLanguageModeling, GPT2Config, GPT2LMHeadModel, LlamaTokenizer
-from trl import SFTTrainer, SFTConfig
+from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader
+from transformers import GPT2Config, GPT2LMHeadModel
 import torch.nn as nn
 
 # 解决 OpenMP 冲突（针对 Windows）
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # ==================== 1. 参数与路径配置 (软编码) ====================
-WORKSPACE_ROOT = "../../"
+WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 TRAIN_DATA_PATH = os.path.join(WORKSPACE_ROOT, "train-set/tokenized/train-formatted.arrow/")
 TOKENIZER_PATH = os.path.join(WORKSPACE_ROOT, "tokenizer/chinese_spm.model")
 OUTPUT_DIR = os.path.join(WORKSPACE_ROOT, "models/pretrain/decoder")
@@ -27,6 +28,7 @@ EPOCHS = 3
 SAVE_STEPS = 500
 LOGGING_STEPS = 100
 WEIGHT_DECAY = 0.01
+GRADIENT_ACCUMULATION_STEPS = 1
 
 def get_decoder_model(vocab_size):
     config = GPT2Config(
@@ -42,6 +44,44 @@ def get_decoder_model(vocab_size):
     )
     return GPT2LMHeadModel(config)
 
+
+def causal_lm_collate(batch):
+    input_ids = [
+        torch.tensor(item["input_ids"][:MAX_LEN], dtype=torch.long)
+        for item in batch
+    ]
+    input_ids = pad_sequence(input_ids, batch_first=True, padding_value=0)
+    attention_mask = input_ids.ne(0).long()
+    labels = input_ids.clone()
+    labels[input_ids == 0] = -100
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+    }
+
+
+def find_latest_checkpoint(output_dir):
+    if not os.path.exists(output_dir):
+        return None
+
+    checkpoints = []
+    for dirname in os.listdir(output_dir):
+        if not dirname.startswith("checkpoint-"):
+            continue
+        try:
+            step = int(dirname.split("-")[-1])
+        except ValueError:
+            continue
+        checkpoints.append((step, os.path.join(output_dir, dirname)))
+
+    if not checkpoints:
+        return None
+
+    checkpoints.sort(key=lambda item: item[0])
+    return checkpoints[-1]
+
 # ==================== 2. 训练主流程 ====================
 def main():
     # 获取分布式环境状态
@@ -54,12 +94,9 @@ def main():
     # 1. 加载分词器
     if is_main_process:
         print(f"正在加载分词器: {TOKENIZER_PATH}")
-    # 使用 LlamaTokenizer 加载 SentencePiece 模型，并设置特殊 Token
-    tokenizer = LlamaTokenizer(vocab_file=TOKENIZER_PATH)
-    tokenizer.pad_token_id = 0
-    tokenizer.bos_token_id = 2
-    tokenizer.eos_token_id = 3
-    vocab_size = len(tokenizer)
+    sp = spm.SentencePieceProcessor()
+    sp.Load(TOKENIZER_PATH)
+    vocab_size = sp.GetPieceSize()
 
     # 2. 加载数据集
     if is_main_process:
@@ -88,63 +125,84 @@ def main():
     model = get_decoder_model(vocab_size)
     # 不再手动移至 DEVICE，由 Trainer 处理分布式分配
 
-    # 4. 配置训练参数 (使用 SFTConfig 解决警告)
+    # 4. 配置训练组件
     if is_main_process:
         print("正在配置训练参数...")
-    training_args = SFTConfig(
-        output_dir=OUTPUT_DIR,
-        overwrite_output_dir=True,
-        num_train_epochs=EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        save_steps=SAVE_STEPS,
-        save_total_limit=3,
-        logging_steps=5,
-        learning_rate=LEARNING_RATE,
-        bf16=torch.cuda.is_bf16_supported(), # 4090 支持 BF16，提供更好的数值稳定性
-        tf32=True, # 4090 必开 TF32
-        logging_dir=LOGS_DIR,
-        report_to="none",
-        dataloader_num_workers=4, # 4090 环境通常 CPU 核心也较多，开启多进程加速数据读取
-        remove_unused_columns=False,
-        group_by_length=False,
-        dataloader_pin_memory=True,
-        full_determinism=False,
-        # SFTConfig 特有参数
-        max_seq_length=MAX_LEN,
-        packing=True,
-        dataset_text_field="input_ids", 
-        ddp_find_unused_parameters=False,
-    )
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 
-    # 5. 训练器
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        tokenizer=tokenizer,             # 必须显式传入 tokenizer 解决 OSError
-        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False), # 动态生成 labels 并解决张量长度不一问题
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    dataloader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        collate_fn=causal_lm_collate,
+        num_workers=0,
+        pin_memory=False,
     )
+    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
 
     if is_main_process:
         print("--- 准备就绪，即将开始训练。注意：由于数据量巨大，启动前会有 30-60 秒静默期 ---")
 
     
-    # 断点续传逻辑
-    resume_from_checkpoint = None
-    if os.path.exists(OUTPUT_DIR):
-        dirs = [d for d in os.listdir(OUTPUT_DIR) if d.startswith("checkpoint-")]
-        if dirs:
-            try:
-                dirs.sort(key=lambda x: int(x.split("-")[-1]))
-                resume_from_checkpoint = os.path.join(OUTPUT_DIR, dirs[-1])
-                if is_main_process:
-                    print(f"检测到历史存档，将从 {resume_from_checkpoint} 恢复训练...")
-            except: pass
+    start_step = 0
+    latest_checkpoint = find_latest_checkpoint(OUTPUT_DIR)
+    if latest_checkpoint is not None:
+        start_step, checkpoint_dir = latest_checkpoint
+        if is_main_process:
+            print(f"检测到历史存档，将从 {checkpoint_dir} 恢复训练...")
+        model = GPT2LMHeadModel.from_pretrained(checkpoint_dir).to(device)
+        optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
+        if os.path.exists(optimizer_path):
+            optimizer.load_state_dict(torch.load(optimizer_path, map_location=device))
 
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    model.train()
+    global_step = start_step
+    skipped_steps = 0
+    total_steps = math.ceil(len(dataloader) * EPOCHS / GRADIENT_ACCUMULATION_STEPS)
+    progress_bar = tqdm(total=total_steps, initial=start_step, disable=not is_main_process)
+
+    for epoch in range(EPOCHS):
+        for batch in dataloader:
+            if global_step >= total_steps:
+                break
+
+            if skipped_steps < start_step:
+                skipped_steps += 1
+                continue
+
+            batch = {key: value.to(device) for key, value in batch.items()}
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+                outputs = model(**batch)
+                loss = outputs.loss / GRADIENT_ACCUMULATION_STEPS
+
+            loss.backward()
+
+            if (global_step + 1) % GRADIENT_ACCUMULATION_STEPS == 0:
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+            global_step += 1
+            if is_main_process:
+                progress_bar.update(1)
+                if global_step % LOGGING_STEPS == 0:
+                    progress_bar.set_postfix({"loss": f"{loss.item() * GRADIENT_ACCUMULATION_STEPS:.4f}"})
+
+            if global_step % SAVE_STEPS == 0:
+                checkpoint_dir = os.path.join(OUTPUT_DIR, f"checkpoint-{global_step}")
+                model.save_pretrained(checkpoint_dir)
+                torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
+
+    if is_main_process:
+        progress_bar.close()
     
     if is_main_process:
-        trainer.save_model(os.path.join(OUTPUT_DIR, "final"))
+        model.save_pretrained(os.path.join(OUTPUT_DIR, "final"))
         print("训练全部完成！")
 
 if __name__ == "__main__":
