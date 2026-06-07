@@ -5,8 +5,8 @@ import sys
 import sentencepiece as spm
 from tqdm import tqdm
 from datasets import load_from_disk
-from transformers import Trainer, TrainingArguments, DataCollatorForLanguageModeling, GPT2Config, GPT2LMHeadModel
-from trl import SFTTrainer
+from transformers import Trainer, TrainingArguments, DataCollatorForLanguageModeling, GPT2Config, GPT2LMHeadModel, LlamaTokenizer
+from trl import SFTTrainer, SFTConfig
 import torch.nn as nn
 
 # 解决 OpenMP 冲突（针对 Windows）
@@ -52,9 +52,13 @@ def main():
         print(f"检测到显卡: {torch.cuda.get_device_name(0)}")
 
     # 1. 加载分词器
-    sp = spm.SentencePieceProcessor()
-    sp.Load(TOKENIZER_PATH)
-    vocab_size = sp.GetPieceSize()
+    print(f"正在加载分词器: {TOKENIZER_PATH}")
+    # 使用 LlamaTokenizer 加载 SentencePiece 模型，并设置特殊 Token
+    tokenizer = LlamaTokenizer(vocab_file=TOKENIZER_PATH)
+    tokenizer.pad_token_id = 0
+    tokenizer.bos_token_id = 2
+    tokenizer.eos_token_id = 3
+    vocab_size = len(tokenizer)
 
     # 2. 加载数据集
     print(f"正在读取数据集 (千万级索引建立中，请耐心等候...): {TRAIN_DATA_PATH}")
@@ -86,36 +90,37 @@ def main():
     model.to(DEVICE)
     print(f"模型已移至: {DEVICE}")
 
-    # 4. 配置训练参数 (极致精简版，防止大数据扫描卡死)
+    # 4. 配置训练参数 (使用 SFTConfig 解决警告)
     print("正在配置训练参数 (禁用冗余扫描)...")
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         overwrite_output_dir=True,
         num_train_epochs=EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         save_steps=SAVE_STEPS,
         save_total_limit=3,
-        logging_steps=5,         # 增加日志频率
+        logging_steps=5,
         learning_rate=LEARNING_RATE,
         fp16=torch.cuda.is_available(),
         logging_dir=LOGS_DIR,
         report_to="none",
-        # 针对 Windows + 大规模数据的终极优化
         dataloader_num_workers=0,
         remove_unused_columns=False,
-        group_by_length=False,      # 这里是关键，防止扫描全表长度
-        dataloader_pin_memory=False, # 减轻显存压力
-        full_determinism=False, 
+        group_by_length=False,
+        dataloader_pin_memory=False,
+        full_determinism=False,
+        # SFTConfig 特有参数
+        max_seq_length=MAX_LEN,
+        packing=True,
+        dataset_text_field="input_ids", # 即使 dataset_text_field 为 None，内部逻辑有时也需要指定
     )
 
-    # 5. 训练器 (使用 SFTTrainer 支持 Packing)
+    # 5. 训练器
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        dataset_text_field=None,         # 因为已经是 input_ids 了
-        max_seq_length=MAX_LEN,
-        packing=True,                    # 开启核心魔法
+        tokenizer=tokenizer,             # 必须显式传入 tokenizer 解决 OSError
     )
 
     print("--- 准备就绪，即将开始训练。注意：由于数据量巨大，启动前会有 30-60 秒静默期 ---")
