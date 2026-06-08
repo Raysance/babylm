@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader
 from transformers import GPT2Config, GPT2LMHeadModel
 import torch.nn as nn
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from hf_utils import save_model_and_tokenizer
+
 # 解决 OpenMP 冲突（针对 Windows）
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -25,7 +28,7 @@ MAX_LEN = 128
 BATCH_SIZE = 32  # 4090 显存充足，调大 Batch Size 提升吞吐量
 LEARNING_RATE = 2e-4 # 随着 Batch Size 变大，学习率适当调高
 EPOCHS = 3
-SAVE_STEPS = 500
+SAVE_STEPS = 25000
 LOGGING_STEPS = 100
 WEIGHT_DECAY = 0.01
 GRADIENT_ACCUMULATION_STEPS = 1
@@ -134,8 +137,6 @@ def main():
     torch.backends.cudnn.allow_tf32 = True
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     dataloader = DataLoader(
         train_dataset,
         batch_size=BATCH_SIZE,
@@ -157,6 +158,11 @@ def main():
         if is_main_process:
             print(f"检测到历史存档，将从 {checkpoint_dir} 恢复训练...")
         model = GPT2LMHeadModel.from_pretrained(checkpoint_dir).to(device)
+    else:
+        model.to(device)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    if latest_checkpoint is not None:
         optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
         if os.path.exists(optimizer_path):
             optimizer.load_state_dict(torch.load(optimizer_path, map_location=device))
@@ -195,14 +201,14 @@ def main():
 
             if global_step % SAVE_STEPS == 0:
                 checkpoint_dir = os.path.join(OUTPUT_DIR, f"checkpoint-{global_step}")
-                model.save_pretrained(checkpoint_dir)
+                save_model_and_tokenizer(model, TOKENIZER_PATH, checkpoint_dir)
                 torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
 
     if is_main_process:
         progress_bar.close()
     
     if is_main_process:
-        model.save_pretrained(os.path.join(OUTPUT_DIR, "final"))
+        save_model_and_tokenizer(model, TOKENIZER_PATH, os.path.join(OUTPUT_DIR, "final"))
         print("训练全部完成！")
 
 if __name__ == "__main__":

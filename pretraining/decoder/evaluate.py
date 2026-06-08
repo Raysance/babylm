@@ -11,13 +11,27 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../"))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-from pretraining.decoder import get_decoder_model
-
 # ==================== 1. 参数与路径配置 (软编码) ====================
 TOKENIZER_PATH = os.path.join(PROJECT_ROOT, "tokenizer/chinese_spm.model")
 # 默认加载训练脚本输出的 final 模型
 MODEL_PATH = os.path.join(PROJECT_ROOT, "models/pretrain/decoder/final")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MAX_LEN=128
+
+def get_decoder_model(vocab_size):
+    config = GPT2Config(
+        vocab_size=vocab_size,
+        n_positions=MAX_LEN,
+        n_ctx=MAX_LEN,
+        n_embd=384,
+        n_layer=6,
+        n_head=12,
+        pad_token_id=0,
+        bos_token_id=2,
+        eos_token_id=3,
+    )
+    return GPT2LMHeadModel(config)
+
 
 def calculate_confidence(model, sp, text, device):
     """
