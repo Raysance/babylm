@@ -1,5 +1,7 @@
 *.parquet
 *.arrow
-*.txt
+*.pt
+train-raw.txt
+train-formatted.txt
 __pycache__
 checkpoint*/

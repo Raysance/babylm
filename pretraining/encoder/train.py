@@ -8,6 +8,7 @@ from datasets import DatasetDict, load_from_disk
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import get_linear_schedule_with_warmup
 from transformers import BertConfig, BertForMaskedLM
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -23,14 +24,16 @@ OUTPUT_DIR = os.path.join(WORKSPACE_ROOT, "models", "pretrain", "encoder")
 LOGS_DIR = os.path.join(WORKSPACE_ROOT, "logs", "encoder_pretrain")
 
 MAX_LEN = 128
-BATCH_SIZE = 32
-LEARNING_RATE = 2e-4
+BATCH_SIZE = 64
+LEARNING_RATE = 1e-4
 EPOCHS = 3
 SAVE_STEPS = 25000
 LOGGING_STEPS = 100
 WEIGHT_DECAY = 0.01
 GRADIENT_ACCUMULATION_STEPS = 1
 MLM_PROBABILITY = 0.15
+WARMUP_RATIO = 0.03
+LOAD_OPTIMIZER_STATE = False
 
 PAD_TOKEN_ID = 0
 UNK_TOKEN_ID = 1
@@ -73,6 +76,14 @@ def mlm_collate(batch):
     probability_matrix.masked_fill_(special_tokens_mask, 0.0)
 
     masked_indices = torch.bernoulli(probability_matrix).bool()
+    for row_idx in range(masked_indices.size(0)):
+        if masked_indices[row_idx].any():
+            continue
+        candidate_indices = (~special_tokens_mask[row_idx]).nonzero(as_tuple=False).flatten()
+        if candidate_indices.numel() > 0:
+            random_position = candidate_indices[torch.randint(candidate_indices.numel(), (1,)).item()]
+            masked_indices[row_idx, random_position] = True
+
     labels[~masked_indices] = -100
 
     replace_with_mask = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
@@ -170,15 +181,26 @@ def main():
         model.to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    if latest_checkpoint is not None:
+    total_steps = math.ceil(len(dataloader) * EPOCHS / GRADIENT_ACCUMULATION_STEPS)
+    warmup_steps = max(1, int(total_steps * WARMUP_RATIO))
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
+    )
+    if latest_checkpoint is not None and LOAD_OPTIMIZER_STATE:
         optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
         if os.path.exists(optimizer_path):
-            optimizer.load_state_dict(torch.load(optimizer_path, map_location=device))
+            optimizer.load_state_dict(torch.load(optimizer_path, map_location=device, weights_only=True))
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = LEARNING_RATE
+        scheduler_path = os.path.join(checkpoint_dir, "scheduler.pt")
+        if os.path.exists(scheduler_path):
+            scheduler.load_state_dict(torch.load(scheduler_path, map_location=device, weights_only=True))
 
     model.train()
     global_step = start_step
-    skipped_steps = 0
-    total_steps = math.ceil(len(dataloader) * EPOCHS / GRADIENT_ACCUMULATION_STEPS)
+    recent_losses = []
     progress_bar = tqdm(total=total_steps, initial=start_step, disable=not is_main_process)
 
     for _epoch in range(EPOCHS):
@@ -186,31 +208,38 @@ def main():
             if global_step >= total_steps:
                 break
 
-            if skipped_steps < start_step:
-                skipped_steps += 1
-                continue
-
             batch = {key: value.to(device) for key, value in batch.items()}
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
                 outputs = model(**batch)
                 loss = outputs.loss / GRADIENT_ACCUMULATION_STEPS
 
+            display_loss = loss.item() * GRADIENT_ACCUMULATION_STEPS
+            recent_losses.append(display_loss)
+            if len(recent_losses) > LOGGING_STEPS:
+                recent_losses.pop(0)
+
             loss.backward()
 
             if (global_step + 1) % GRADIENT_ACCUMULATION_STEPS == 0:
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
             if is_main_process:
                 progress_bar.update(1)
                 if global_step % LOGGING_STEPS == 0:
-                    progress_bar.set_postfix({"loss": f"{loss.item() * GRADIENT_ACCUMULATION_STEPS:.4f}"})
+                    avg_loss = sum(recent_losses) / len(recent_losses)
+                    progress_bar.set_postfix({
+                        "loss": f"{display_loss:.4f}",
+                        f"avg{len(recent_losses)}": f"{avg_loss:.4f}",
+                    })
 
             if global_step % SAVE_STEPS == 0:
                 checkpoint_dir = os.path.join(OUTPUT_DIR, f"checkpoint-{global_step}")
                 save_model_and_tokenizer(model, TOKENIZER_PATH, checkpoint_dir)
                 torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
+                torch.save(scheduler.state_dict(), os.path.join(checkpoint_dir, "scheduler.pt"))
 
     if is_main_process:
         progress_bar.close()

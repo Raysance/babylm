@@ -165,11 +165,10 @@ def main():
     if latest_checkpoint is not None:
         optimizer_path = os.path.join(checkpoint_dir, "optimizer.pt")
         if os.path.exists(optimizer_path):
-            optimizer.load_state_dict(torch.load(optimizer_path, map_location=device))
+            optimizer.load_state_dict(torch.load(optimizer_path, map_location=device, weights_only=True))
 
     model.train()
     global_step = start_step
-    skipped_steps = 0
     total_steps = math.ceil(len(dataloader) * EPOCHS / GRADIENT_ACCUMULATION_STEPS)
     progress_bar = tqdm(total=total_steps, initial=start_step, disable=not is_main_process)
 
@@ -177,10 +176,6 @@ def main():
         for batch in dataloader:
             if global_step >= total_steps:
                 break
-
-            if skipped_steps < start_step:
-                skipped_steps += 1
-                continue
 
             batch = {key: value.to(device) for key, value in batch.items()}
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
@@ -213,4 +208,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
