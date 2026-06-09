@@ -201,6 +201,12 @@ Evaluate the final encoder with fine-tuning:
 bash .\scripts\eval_nlu_encoder.sh
 ```
 
+Evaluate the final encoder with ZhoBLiMP zero-shot MLM scoring:
+
+```powershell
+.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python
+```
+
 The default model paths are:
 
 - Decoder: `models/pretrain/decoder/final`
@@ -211,6 +217,7 @@ You can also evaluate a specific checkpoint:
 ```powershell
 bash .\scripts\eval_nlu_decoder.sh models/pretrain/decoder/checkpoint-25000
 bash .\scripts\eval_nlu_encoder.sh models/pretrain/encoder/checkpoint-25000
+.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python -ModelDir .\models\pretrain\encoder\checkpoint-25000
 ```
 
 Decoder evaluation accepts an optional evaluation-data path as the second
@@ -230,6 +237,12 @@ The encoder arguments are:
 
 ```text
 model_path learning_rate batch_size max_epochs wsc_epochs seed seq_len
+```
+
+Encoder ZhoBLiMP evaluation accepts optional data and output paths:
+
+```powershell
+.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python -ModelDir .\models\pretrain\encoder\final -DataDir .\evaluation_data\full_eval\zhoblimp -OutputDir .\pretraining\encoder\eval-results-zhoblimp
 ```
 
 For encoder fine-tuning, AFQMC and CLUEWSC2020 use `mcc` as the validation
