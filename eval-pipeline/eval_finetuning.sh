@@ -42,7 +42,7 @@ python -m evaluation_pipeline.finetune.run \
     --save \
     --save_dir "models" \
     --metrics accuracy f1 mcc \
-    --metric_for_valid accuracy \
+    --metric_for_valid mcc \
     --seed $SEED \
     $BACKEND_FLAGS \
     --verbose
@@ -105,7 +105,7 @@ python -m evaluation_pipeline.finetune.run \
     --save \
     --save_dir "models" \
     --metrics accuracy f1 mcc \
-    --metric_for_valid accuracy \
+    --metric_for_valid mcc \
     --seed $SEED \
     $BACKEND_FLAGS \
     --verbose

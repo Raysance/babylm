@@ -154,9 +154,10 @@ Default encoder settings:
 - Attention heads: `12`
 - Max sequence length: `128`
 - Batch size: `64`
-- Learning rate: `3e-4`
-- Mask probability: `0.30`
-- Epochs: `3`
+- Learning rate: `1e-4`
+- Mask probability: `0.15`
+- Warmup: `30000` steps, then constant learning rate
+- Training duration: runs until `Ctrl+C`
 - Save interval: every `25000` steps
 
 Outputs are saved under:
@@ -165,9 +166,26 @@ Outputs are saved under:
 - Final model: `models/pretrain/encoder/final`
 - Logs directory: `logs/encoder_pretrain`
 
-If checkpoint folders already exist, the script resumes from the latest
-`checkpoint-*` directory. By default, encoder training reloads model weights but
-does not reload optimizer state (`LOAD_OPTIMIZER_STATE = False`).
+Encoder training is intentionally open-ended. Press `Ctrl+C` to stop; the
+script catches the interrupt, saves the current model to
+`models/pretrain/encoder/final`, and writes `trainer_state.json` with the
+current `global_step`.
+
+Each encoder checkpoint and final save contains:
+
+- Hugging Face model and tokenizer files
+- `optimizer.pt`
+- `scheduler.pt`
+- `trainer_state.json`
+
+Resume behavior:
+
+- If `models/pretrain/encoder/final/trainer_state.json` exists, training
+  resumes from `final` and continues counting from its saved `global_step`.
+- Otherwise, training resumes from the latest `checkpoint-*` directory.
+- Checkpoint saving always uses the global step modulo `SAVE_STEPS`, so if
+  training stops at step `163200`, the next checkpoint is still saved at
+  `175000`.
 
 ### 4. Run NLU Evaluation
 
@@ -214,6 +232,10 @@ The encoder arguments are:
 model_path learning_rate batch_size max_epochs wsc_epochs seed seq_len
 ```
 
+For encoder fine-tuning, AFQMC and CLUEWSC2020 use `mcc` as the validation
+selection metric to reduce majority-class collapse; OCNLI and TNEWS use
+`accuracy`.
+
 ## One-Command Pipeline
 
 For a complete run, use:
@@ -229,6 +251,10 @@ The pipeline executes:
 3. `python .\pretraining\encoder\train.py`
 4. `bash .\scripts\eval_nlu_decoder.sh`
 5. `bash .\scripts\eval_nlu_encoder.sh`
+
+Because encoder pretraining runs until `Ctrl+C`, a full pipeline run will stay
+in step 3 until you interrupt encoder training. After the interrupt, the
+encoder final model is saved and the pipeline can continue to evaluation.
 
 You can skip stages when resuming:
 

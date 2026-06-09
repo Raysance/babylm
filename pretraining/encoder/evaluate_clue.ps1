@@ -50,6 +50,7 @@ elseif (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path $ModelDir)) {
     throw "Model directory not found: $ModelDir"
 }
+$ModelDir = (Resolve-Path $ModelDir).Path
 
 if (-not (Test-Path (Join-Path $ModelDir "tokenizer_config.json"))) {
     & $Python (Join-Path $ProjectRoot "scripts\export_tokenizer.py") --model_dir $ModelDir

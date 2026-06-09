@@ -301,7 +301,8 @@ class Trainer():
 
         for metric in metrics_to_calculate:
             if metric == "f1":
-                metrics["f1"] = f1_score(labels, predictions)
+                average = "binary" if len(set(labels.tolist())) <= 2 else "macro"
+                metrics["f1"] = f1_score(labels, predictions, average=average, zero_division=0)
             elif metric == "accuracy":
                 metrics["accuracy"] = accuracy_score(labels, predictions)
             elif metric == "mcc":

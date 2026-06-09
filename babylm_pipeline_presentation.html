@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chinese BabyLM NLU Pipeline</title>
+  <style>
+    :root {
+      --text: #111827;
+      --muted: #4b5563;
+      --light: #f8fafc;
+      --line: #d9e1ec;
+      --blue: #1d4ed8;
+      --green: #15803d;
+      --orange: #b45309;
+      --red: #b91c1c;
+      --code: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: #ffffff;
+      font-family: "Times New Roman", "Noto Serif CJK SC", "SimSun", "Microsoft YaHei", serif;
+      overflow: hidden;
+    }
+    .deck {
+      height: 100vh;
+      overflow-y: auto;
+      scroll-snap-type: y mandatory;
+      background: #ffffff;
+    }
+    .slide {
+      position: relative;
+      min-height: 100vh;
+      padding: 42px 60px 54px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      scroll-snap-align: start;
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+    .slide::before {
+      content: "Chinese BabyLM NLU Track";
+      position: absolute;
+      top: 18px;
+      left: 60px;
+      color: #6b7280;
+      font: 13px "Segoe UI", Arial, sans-serif;
+      letter-spacing: .04em;
+    }
+    .slide::after {
+      content: attr(data-page);
+      position: absolute;
+      right: 60px;
+      bottom: 22px;
+      color: #6b7280;
+      font: 13px "Segoe UI", Arial, sans-serif;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { max-width: 1080px; font-size: 50px; line-height: 1.1; letter-spacing: -.02em; }
+    h2 { font-size: 38px; line-height: 1.16; margin-bottom: 22px; }
+    h3 { font-size: 21px; margin-bottom: 10px; }
+    p, li { font-size: 18px; line-height: 1.55; color: var(--muted); }
+    ul, ol { margin: 0; padding-left: 24px; }
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: #eef2f7;
+      color: #111827;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: .9em;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font: 15px "Segoe UI", Arial, sans-serif;
+    }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef2f7; color: #111827; font-weight: 700; }
+    td { color: #374151; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .best { color: var(--green); font-weight: 800; }
+    .bad { color: var(--red); font-weight: 700; }
+    .subtitle { margin-top: 16px; max-width: 1040px; font-size: 22px; line-height: 1.55; color: var(--muted); }
+    .label {
+      width: fit-content;
+      margin-bottom: 12px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      background: var(--light);
+      color: var(--blue);
+      font: 700 13px "Segoe UI", Arial, sans-serif;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .grid { display: grid; gap: 18px; }
+    .two { grid-template-columns: 1fr 1fr; }
+    .three { grid-template-columns: repeat(3, 1fr); }
+    .card { border: 1px solid var(--line); border-radius: 6px; background: #ffffff; padding: 18px 20px; }
+    .shaded { background: var(--light); }
+    .note {
+      margin-top: 16px;
+      border-left: 4px solid var(--blue);
+      padding: 12px 16px;
+      background: var(--light);
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.5;
+    }
+    .warning { border-left-color: var(--orange); }
+    .codeblock {
+      display: block;
+      margin: 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--code);
+      color: #111827;
+      font: 14px/1.48 "Cascadia Mono", Consolas, monospace;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+    .small { font-size: 13px; line-height: 1.42; }
+    .caption { margin-top: 8px; color: #6b7280; font: 13px "Segoe UI", Arial, sans-serif; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+    }
+    .flow-step {
+      position: relative;
+      min-height: 132px;
+      padding: 14px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--light);
+    }
+    .flow-step h3 { font-size: 17px; margin-bottom: 8px; }
+    .flow-step p { font-size: 14px; line-height: 1.42; }
+    .flow-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -18px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--blue);
+      font: 22px "Segoe UI", Arial, sans-serif;
+      z-index: 2;
+    }
+    .chart { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; padding: 12px; }
+    .bar-chart { display: grid; gap: 8px; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 150px 1fr 82px;
+      gap: 10px;
+      align-items: center;
+      font: 14px "Segoe UI", Arial, sans-serif;
+    }
+    .bar-track { height: 16px; border: 1px solid var(--line); background: #f3f4f6; }
+    .bar-fill { height: 100%; width: calc(var(--value) * 1%); background: #2563eb; }
+    .bar-fill.green { background: var(--green); }
+    .tag {
+      display: inline-block;
+      margin: 3px 4px 3px 0;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #ffffff;
+      color: var(--blue);
+      font: 13px "Segoe UI", Arial, sans-serif;
+    }
+    .kbd {
+      position: fixed;
+      left: 18px;
+      bottom: 12px;
+      z-index: 10;
+      color: #6b7280;
+      font: 12px "Segoe UI", Arial, sans-serif;
+    }
+    @media (max-width: 1100px) {
+      body { overflow: auto; }
+      .deck { height: auto; overflow: visible; scroll-snap-type: none; }
+      .slide { min-height: auto; padding: 50px 24px; }
+      .slide::before { left: 24px; }
+      .two, .three, .flow { grid-template-columns: 1fr; }
+      .flow-step::after { display: none; }
+    }
+    @media print {
+      body { overflow: visible; }
+      .deck { height: auto; overflow: visible; }
+      .slide { min-height: 100vh; page-break-after: always; }
+      .kbd { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="kbd">Use ↑ / ↓ or PageUp / PageDown to navigate</div>
+  <main class="deck" id="deck">
+
+    <section class="slide" data-page="01 / 18">
+      <div class="label">Title</div>
+      <h1>Chinese BabyLM NLU Track：从数据处理到模型评估的完整流程</h1>
+      <p class="subtitle">
+        共享 tokenizer 下的 Decoder / Encoder 双模型预训练、ZhoBLiMP zero-shot 评估与 CLUE fine-tuning 评估。
+      </p>
+      <div class="grid three" style="margin-top:28px">
+        <div class="card shaded">
+          <h3>数据</h3>
+          <p>格式化中文语料、SentencePiece tokenizer、Arrow tokenized cache。</p>
+        </div>
+        <div class="card shaded">
+          <h3>模型</h3>
+          <p>GPT-style causal decoder 与 BERT-style masked encoder。</p>
+        </div>
+        <div class="card shaded">
+          <h3>评估</h3>
+          <p>ZhoBLiMP 最小对评估与 CLUE 下游分类任务。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="02 / 18">
+      <div class="label">Table of Contents</div>
+      <h1>目录：Chinese BabyLM NLU Track 完整流程汇报</h1>
+      <div class="grid two" style="margin-top:24px">
+        <div class="card shaded">
+          <h3>上半部分：任务与训练流程</h3>
+          <ol>
+            <li>标题页</li>
+            <li>任务目标简介</li>
+            <li>训练评估完整流程</li>
+            <li>系统大体框架</li>
+            <li>数据清洗与格式化模块</li>
+            <li>Tokenizer 模块</li>
+            <li>Decoder / Encoder 模块运行流程</li>
+          </ol>
+        </div>
+        <div class="card shaded">
+          <h3>下半部分：模型设计、评估与复盘</h3>
+          <ol start="8">
+            <li>模型层级设计点与新颖性边界</li>
+            <li>Checkpoint 与续训模块</li>
+            <li>评估模块运行流程</li>
+            <li>ZhoBLiMP 结果与细分指标</li>
+            <li>Encoder CLUE 结果</li>
+            <li>提升空间与分析复盘</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="03 / 18">
+      <div class="label">Task Objective</div>
+      <h2>任务目标简介</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>ZhoBLiMP：语言学最小对 zero-shot 评估</h3>
+          <ul>
+            <li><b>评估对象：</b>Decoder causal LM。</li>
+            <li><b>评估形式：</b>给定一对只在某个语言学现象上不同的句子，模型需要给可接受句子更高概率。</li>
+            <li><b>覆盖现象：</b>把字句、被动、照应、量词、疑问、关系从句、话题化、NPI/FCI 许可等。</li>
+            <li><b>指标：</b>average accuracy、field accuracy、UID accuracy。</li>
+            <li><b>意义：</b>无需 fine-tuning，直接检验预训练模型是否学到中文语法偏好。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>CLUE-style fine-tuning：下游理解任务评估</h3>
+          <table>
+            <thead><tr><th>Task</th><th>评测内容</th><th>模型需要做什么</th></tr></thead>
+            <tbody>
+              <tr><td>AFQMC</td><td>蚂蚁金融语义相似度</td><td>判断两个问题是不是同一个意思。</td></tr>
+              <tr><td>OCNLI</td><td>中文自然语言推理</td><td>判断两句话是能推出、相矛盾，还是关系不确定。</td></tr>
+              <tr><td>TNEWS</td><td>新闻标题分类</td><td>根据标题判断新闻主题类别。</td></tr>
+              <tr><td>CLUEWSC2020</td><td>中文代词指代</td><td>判断句子里的“他/她/它”到底指谁。</td></tr>
+            </tbody>
+          </table>
+          <table>
+            <thead><tr><th>Metric</th><th>直观含义</th></tr></thead>
+            <tbody>
+              <tr><td>Accuracy</td><td>有多少题答对了，是最直观的正确率。</td></tr>
+              <tr><td>F1</td><td>看模型有没有真正找出“是 / 相似 / 同指”这一类，避免只看总体答对率。</td></tr>
+              <tr><td>MCC</td><td>看模型是不是在认真区分两类；如果总是猜同一个答案，MCC 会很低。</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note">
+        因此，本项目用 ZhoBLiMP 衡量语言形式偏好，用 CLUE 衡量下游任务迁移；两者共同构成 NLU track 的主要评估视角。
+      </div>
+    </section>
+
+    <section class="slide" data-page="04 / 18">
+      <div class="label">Evaluation Examples</div>
+      <h2>CLUE 与 ZhoBLiMP 的具体评估例子</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>ZhoBLiMP minimal-pair 示例</h3>
+          <table>
+            <thead><tr><th>Phenomenon</th><th>Good sentence</th><th>Bad sentence</th><th>判定方式</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>BA negation</td>
+                <td>你没有把玻璃珠弹。</td>
+                <td>你把玻璃珠没有弹。</td>
+                <td>比较两句的 causal LM log-likelihood，good 更高则正确。</td>
+              </tr>
+              <tr>
+                <td>Anaphor number agreement</td>
+                <td>这许多个哥哥更喜欢他们自己。</td>
+                <td>这许多个哥哥更喜欢他自己。</td>
+                <td>检查模型是否偏好数一致的照应结构。</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="caption">例子对应 ZhoBLiMP 数据结构：<code>sentence_good</code>、<code>sentence_bad</code>、<code>UID</code>、<code>phenomenon</code>。</p>
+        </div>
+        <div class="card">
+          <h3>CLUE-style fine-tuning 示例</h3>
+          <table>
+            <thead><tr><th>Task</th><th>具体例子</th><th>标签含义</th><th>评估重点</th></tr></thead>
+            <tbody>
+              <tr><td>AFQMC</td><td>句子1：花呗如何还款？<br>句子2：花呗怎么还？</td><td>相似 / 不相似</td><td>判断两个问法是否表达同一金融意图。</td></tr>
+              <tr><td>OCNLI</td><td>前提：一名男子在弹吉他。<br>假设：有人在演奏乐器。</td><td>蕴含 / 矛盾 / 中立</td><td>判断假设与前提之间的逻辑关系。</td></tr>
+              <tr><td>TNEWS</td><td>标题：央行发布新的金融政策</td><td>新闻类别</td><td>把短新闻标题分到财经、体育、科技等主题。</td></tr>
+              <tr><td>CLUEWSC2020</td><td>句子：小明把奖杯给了小刚，因为他赢了比赛。<br>代词：他；候选：小刚</td><td>同指 / 不同指</td><td>判断代词是否指向给定候选实体。</td></tr>
+            </tbody>
+          </table>
+          <p class="caption">这些是便于展示的简化例子；实际训练/验证由 evaluation pipeline 中的 CLUE JSONL 数据驱动。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="05 / 18">
+      <div class="label">End-to-End Pipeline</div>
+      <h2>训练评估的完整流程</h2>
+      <svg class="chart" viewBox="0 0 1100 560" role="img" aria-label="End-to-end BabyLM pipeline flowchart">
+        <defs>
+          <marker id="flowArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+            <path d="M0,0 L10,5 L0,10 Z" fill="#2563eb" />
+          </marker>
+          <style>
+            .box { fill: #f8fafc; stroke: #d9e1ec; stroke-width: 1.4; }
+            .box2 { fill: #eef2f7; stroke: #cbd5e1; stroke-width: 1.4; }
+            .title { font: 700 18px Arial, sans-serif; fill: #111827; }
+            .desc { font: 14px Arial, sans-serif; fill: #4b5563; }
+            .edge { stroke: #2563eb; stroke-width: 2.4; fill: none; marker-end: url(#flowArrow); }
+            .branch { stroke: #64748b; stroke-width: 2.2; fill: none; marker-end: url(#flowArrow); }
+          </style>
+        </defs>
+        <rect class="box" x="40" y="215" width="150" height="90" rx="8" />
+        <text class="title" x="115" y="250" text-anchor="middle">Raw / Formatted</text>
+        <text class="desc" x="115" y="276" text-anchor="middle">train-formatted.arrow</text>
+        <rect class="box" x="240" y="215" width="150" height="90" rx="8" />
+        <text class="title" x="315" y="250" text-anchor="middle">Tokenizer</text>
+        <text class="desc" x="315" y="276" text-anchor="middle">SentencePiece</text>
+        <rect class="box" x="440" y="215" width="160" height="90" rx="8" />
+        <text class="title" x="520" y="250" text-anchor="middle">Tokenized Cache</text>
+        <text class="desc" x="520" y="276" text-anchor="middle">input_ids, max_len=128</text>
+        <rect class="box2" x="700" y="95" width="170" height="100" rx="8" />
+        <text class="title" x="785" y="132" text-anchor="middle">Decoder</text>
+        <text class="desc" x="785" y="158" text-anchor="middle">causal LM</text>
+        <text class="desc" x="785" y="178" text-anchor="middle">next-token prediction</text>
+        <rect class="box2" x="700" y="330" width="170" height="100" rx="8" />
+        <text class="title" x="785" y="367" text-anchor="middle">Encoder</text>
+        <text class="desc" x="785" y="393" text-anchor="middle">masked LM</text>
+        <text class="desc" x="785" y="413" text-anchor="middle">bidirectional encoding</text>
+        <rect class="box" x="930" y="95" width="140" height="100" rx="8" />
+        <text class="title" x="1000" y="132" text-anchor="middle">ZhoBLiMP</text>
+        <text class="desc" x="1000" y="158" text-anchor="middle">zero-shot</text>
+        <text class="desc" x="1000" y="178" text-anchor="middle">avg / field / UID</text>
+        <rect class="box" x="930" y="330" width="140" height="100" rx="8" />
+        <text class="title" x="1000" y="367" text-anchor="middle">CLUE</text>
+        <text class="desc" x="1000" y="393" text-anchor="middle">fine-tuning</text>
+        <text class="desc" x="1000" y="413" text-anchor="middle">Acc. / F1 / MCC</text>
+        <path class="edge" d="M190 260 H240" />
+        <path class="edge" d="M390 260 H440" />
+        <path class="branch" d="M600 260 C650 260 650 145 700 145" />
+        <path class="branch" d="M600 260 C650 260 650 380 700 380" />
+        <path class="edge" d="M870 145 H930" />
+        <path class="edge" d="M870 380 H930" />
+      </svg>
+    </section>
+
+    <section class="slide" data-page="06 / 18">
+      <div class="label">Overall Architecture</div>
+      <h2>大体框架：共享输入空间 + 双模型评估</h2>
+      <div class="grid three">
+        <div class="card shaded">
+          <h3>输入层</h3>
+          <p>统一格式的中文语料、共享 SentencePiece tokenizer、Arrow tokenized cache。</p>
+          <span class="tag">BOS/EOS</span><span class="tag">MAX_LEN=128</span><span class="tag">input_ids</span>
+        </div>
+        <div class="card shaded">
+          <h3>模型层</h3>
+          <p>同一输入空间下并行训练 Decoder 与 Encoder，分别对应生成式与判别式语言建模目标。</p>
+          <span class="tag">causal LM</span><span class="tag">masked LM</span><span class="tag">6 layers</span>
+        </div>
+        <div class="card shaded">
+          <h3>评估层</h3>
+          <p>Decoder 用最小对 zero-shot scoring，Encoder 用下游 supervised fine-tuning。</p>
+          <span class="tag">ZhoBLiMP</span><span class="tag">CLUE</span><span class="tag">MCC</span>
+        </div>
+      </div>
+      <div class="note">
+        框架层面的核心思想：不是只训练一个模型，而是在同一数据与 tokenizer 条件下构建互补的双 backbone，以覆盖语法偏好与下游分类两类能力。
+      </div>
+    </section>
+
+    <section class="slide" data-page="07 / 18">
+      <div class="label">Data Cleaning Module</div>
+      <h2>数据清洗与格式化模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>流程</h3>
+          <div class="flow">
+            <div class="flow-step"><h3>原始语料</h3><p>不同来源、格式不统一。</p></div>
+            <div class="flow-step"><h3>格式化</h3><p>转换为统一 text 字段。</p></div>
+            <div class="flow-step"><h3>Arrow</h3><p>保存为 train-formatted.arrow。</p></div>
+            <div class="flow-step"><h3>检查</h3><p>UTF-8 与文本格式检查。</p></div>
+            <div class="flow-step"><h3>输入</h3><p>供 tokenizer 和 cache 使用。</p></div>
+            <div class="flow-step"><h3>复现</h3><p>固定训练输入。</p></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>清洗规则</h3>
+          <table>
+            <thead><tr><th>步骤</th><th>处理方式</th><th>原因</th></tr></thead>
+            <tbody>
+              <tr><td>编码检查</td><td>检测并转换为 UTF-8</td><td>避免中文读取和后续 Arrow 保存出现乱码。</td></tr>
+              <tr><td>Wiki 噪声过滤</td><td>过滤表格/标题标记，如 <code>{|</code>、<code>|-</code>、<code>|!</code>、多级 <code>==</code></td><td>去除非自然语言文本。</td></tr>
+              <tr><td>拼音对话过滤</td><td>识别 <code>*NAME:</code> 且内容主要为拼音/英文数字的行</td><td>减少儿童语料转写噪声。</td></tr>
+              <tr><td>LaTeX 清理</td><td>移除命令、括号、上下标等符号，保留可读文本</td><td>避免公式符号污染 tokenizer。</td></tr>
+              <tr><td>句子切分</td><td>按换行、空格和中英文标点切分</td><td>得到更短、更适合 <code>MAX_LEN=128</code> 的样本。</td></tr>
+              <tr><td>字符过滤</td><td>仅保留汉字、英文、数字</td><td>降低标点和控制符噪声。</td></tr>
+              <tr><td>长度/比例过滤</td><td>长度需大于 3；英文数字比例不超过 50%</td><td>过滤过短样本和非中文主导样本。</td></tr>
+              <tr><td>去重</td><td><code>drop_duplicates()</code></td><td>减少重复句子导致的训练偏置。</td></tr>
+            </tbody>
+          </table>
+          <h3 style="margin-top:16px">相关脚本</h3>
+          <pre class="codeblock small">train-set/scripts/check_txt_format_utf8.py
+train-set/scripts/parquet_raw_to_formatted.py
+preprocess/cache_dataset.py</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="08 / 18">
+      <div class="label">Tokenizer Module</div>
+      <h2>Tokenizer 模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>运行流程</h3>
+          <pre class="codeblock small">formatted corpus
+  -> train SentencePiece tokenizer
+  -> tokenizer/chinese_spm.model
+  -> tokenizer/chinese_spm.vocab
+  -> export tokenizer files into each model checkpoint</pre>
+          <h3 style="margin-top:16px">特殊 token</h3>
+          <table>
+            <thead><tr><th>Token</th><th class="num">ID</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td>[PAD]</td><td class="num">0</td><td>padding</td></tr>
+              <tr><td>[UNK]</td><td class="num">1</td><td>unknown</td></tr>
+              <tr><td>[BOS]</td><td class="num">2</td><td>beginning</td></tr>
+              <tr><td>[EOS]</td><td class="num">3</td><td>end</td></tr>
+              <tr><td>[MASK]</td><td class="num">4</td><td>MLM</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>模型层级设计点</h3>
+          <ul>
+            <li><b>共享词表：</b>Decoder 与 Encoder 使用同一子词空间，避免词表差异影响对比。</li>
+            <li><b>中文适配：</b>SentencePiece 不依赖空格分词，适合中文语料。</li>
+            <li><b>特殊 token 固定：</b>使 causal LM 与 MLM 的 collate 逻辑都可稳定识别 padding、mask 和边界。</li>
+          </ul>
+          <div class="note warning">
+            这不是新的 tokenizer 算法，但属于模型输入层面的统一设计，对双模型对比实验非常关键。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="09 / 18">
+      <div class="label">Decoder Module</div>
+      <h2>Decoder 模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>训练配置与流程</h3>
+          <table>
+            <tbody>
+              <tr><th>Architecture</th><td>GPT-style causal LM</td></tr>
+              <tr><th>Hidden size</th><td class="num">384</td></tr>
+              <tr><th>Layers</th><td class="num">6</td></tr>
+              <tr><th>Heads</th><td class="num">12</td></tr>
+              <tr><th>Max length</th><td class="num">128</td></tr>
+              <tr><th>Batch size</th><td class="num">32</td></tr>
+              <tr><th>Learning rate</th><td class="num">2e-4</td></tr>
+            </tbody>
+          </table>
+          <pre class="codeblock small" style="margin-top:12px">python .\pretraining\decoder\train.py
+bash .\scripts\eval_nlu_decoder.sh</pre>
+        </div>
+        <div class="card">
+          <h3>核心代码</h3>
+          <pre class="codeblock small">def causal_lm_collate(batch):
+    input_ids = [item["input_ids"][:MAX_LEN] for item in batch]
+    input_ids = pad_sequence(input_ids, batch_first=True, padding_value=0)
+    attention_mask = input_ids.ne(0).long()
+    labels = input_ids.clone()
+    labels[input_ids == 0] = -100
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}</pre>
+          <h3 style="margin-top:14px">模型层级设计点</h3>
+          <ul>
+            <li>用 causal objective 对齐 ZhoBLiMP 的句子似然比较。</li>
+            <li>紧凑 6-layer 配置适配 BabyLM 小语料与课程算力限制。</li>
+            <li>保留 checkpoint sweep，使模型选择基于语言学评估，而非默认 final。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="10 / 18">
+      <div class="label">Encoder Module</div>
+      <h2>Encoder 模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>训练配置与流程</h3>
+          <table>
+            <tbody>
+              <tr><th>Architecture</th><td>BERT-style MLM</td></tr>
+              <tr><th>Hidden size</th><td class="num">384</td></tr>
+              <tr><th>Layers</th><td class="num">6</td></tr>
+              <tr><th>Heads</th><td class="num">12</td></tr>
+              <tr><th>Max length</th><td class="num">128</td></tr>
+              <tr><th>Batch size</th><td class="num">64</td></tr>
+              <tr><th>Learning rate</th><td class="num">1e-4</td></tr>
+              <tr><th>MLM probability</th><td class="num">0.15</td></tr>
+              <tr><th>Stop</th><td>only Ctrl+C</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>核心 mask 代码</h3>
+          <pre class="codeblock small">probability_matrix = torch.full(labels.shape, MLM_PROBABILITY)
+special_tokens_mask = (
+    input_ids.eq(PAD_TOKEN_ID)
+    | input_ids.eq(UNK_TOKEN_ID)
+    | input_ids.eq(BOS_TOKEN_ID)
+    | input_ids.eq(EOS_TOKEN_ID)
+)
+probability_matrix.masked_fill_(special_tokens_mask, 0.0)
+masked_indices = torch.bernoulli(probability_matrix).bool()
+labels[~masked_indices] = -100</pre>
+          <h3 style="margin-top:14px">模型层级设计点</h3>
+          <ul>
+            <li>用 bidirectional MLM 对齐 CLUE 分类任务的句子表示需求。</li>
+            <li>显式排除特殊 token，避免模型学习无意义的边界/填充预测。</li>
+            <li>用紧凑 BERT-style backbone 支持受限数据下的稳定 fine-tuning。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="11 / 18">
+      <div class="label">Model-Level Design</div>
+      <h2>模型层级设计：双 backbone 与任务适配</h2>
+      <div class="grid two">
+        <div class="card shaded">
+          <h3>双 backbone 设计</h3>
+          <ul>
+            <li>Decoder 负责左到右句子概率建模，天然适配 minimal-pair scoring。</li>
+            <li>Encoder 负责双向上下文表示学习，天然适配句子分类和句对分类。</li>
+            <li>两类 backbone 在同一数据和 tokenizer 条件下训练，便于比较预训练目标差异。</li>
+          </ul>
+        </div>
+        <div class="card shaded">
+          <h3>模型配置取舍</h3>
+          <ul>
+            <li><b>小模型容量：</b>6 layers、hidden size 384、12 heads，适配受限数据和有限算力。</li>
+            <li><b>共享输入空间：</b>统一 SentencePiece tokenizer，减少 tokenizer 差异带来的混杂因素。</li>
+            <li><b>目标函数适配：</b>causal LM 对齐 ZhoBLiMP；MLM 对齐 CLUE fine-tuning。</li>
+            <li><b>checkpoint 选择：</b>Decoder 按 ZhoBLiMP 曲线选择最优 checkpoint，而不是默认 final。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="12 / 18">
+      <div class="label">Training State Module</div>
+      <h2>Checkpoint 与续训模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>保存逻辑</h3>
+          <pre class="codeblock small">def save_training_checkpoint(model, optimizer, scheduler, output_dir, global_step):
+    save_model_and_tokenizer(model, TOKENIZER_PATH, output_dir)
+    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+    save_trainer_state(output_dir, global_step)</pre>
+        </div>
+        <div class="card">
+          <h3>续训规则</h3>
+          <ol>
+            <li>如果 <code>final/trainer_state.json</code> 存在，从 final 继续。</li>
+            <li>否则从最新 <code>checkpoint-*</code> 继续。</li>
+            <li>checkpoint 保存按 <code>global_step % SAVE_STEPS == 0</code> 判断。</li>
+          </ol>
+          <div class="note">
+            例：在 step 163200 中断，下次继续后下一个 checkpoint 仍是 step 175000。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="13 / 18">
+      <div class="label">Evaluation Module</div>
+      <h2>评估模块运行流程</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>Decoder：ZhoBLiMP zero-shot</h3>
+          <pre class="codeblock">bash .\scripts\eval_nlu_decoder.sh</pre>
+          <ul>
+            <li>Backend：causal</li>
+            <li>Task：zhoblimp</li>
+            <li>Output：average accuracy、field accuracy、UID accuracy</li>
+            <li>解释：模型是否给语法正确句子更高概率。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>Encoder：CLUE fine-tuning</h3>
+          <pre class="codeblock">bash .\scripts\eval_nlu_encoder.sh</pre>
+          <ul>
+            <li>任务：AFQMC、OCNLI、TNEWS、CLUEWSC2020</li>
+            <li>默认超参：lr 3e-5，batch 64，epochs 5，seed 42，seq_len 128</li>
+            <li>AFQMC 和 CLUEWSC2020 会额外检查模型是不是只会猜同一类。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="14 / 18">
+      <div class="label">Decoder Results</div>
+      <h2>ZhoBLiMP 评估结果：图文结合</h2>
+      <div class="grid two">
+        <div class="card">
+          <svg class="chart" viewBox="0 0 760 430" role="img" aria-label="Decoder ZhoBLiMP average accuracy">
+            <rect x="0" y="0" width="760" height="430" fill="#ffffff" />
+            <g stroke="#d9e1ec" stroke-width="1">
+              <line x1="70" y1="60" x2="70" y2="350" />
+              <line x1="70" y1="350" x2="710" y2="350" />
+              <line x1="70" y1="292" x2="710" y2="292" />
+              <line x1="70" y1="234" x2="710" y2="234" />
+              <line x1="70" y1="176" x2="710" y2="176" />
+              <line x1="70" y1="118" x2="710" y2="118" />
+            </g>
+            <g fill="#4b5563" font-size="14" font-family="Arial">
+              <text x="30" y="354">65</text><text x="30" y="296">68</text><text x="30" y="238">71</text><text x="30" y="180">74</text><text x="30" y="122">77</text>
+              <text x="94" y="382">25k</text><text x="268" y="382">225k</text><text x="454" y="382">425k</text><text x="636" y="382">675k</text>
+            </g>
+            <polyline fill="none" stroke="#2563eb" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"
+              points="95,343 118,239 142,221 166,160 190,129 214,153 238,149 262,142 286,130 310,143 334,151 358,136 382,98 406,135 430,135 454,122 478,103 502,135 526,101 550,106 574,131 598,119 622,125 646,122 670,122 694,143 710,121" />
+            <circle cx="382" cy="98" r="7" fill="#15803d" />
+            <text x="392" y="92" fill="#15803d" font-size="17" font-weight="700" font-family="Arial">Best: 77.93 @ 325k</text>
+            <circle cx="710" cy="121" r="6" fill="#b45309" />
+            <text x="584" y="75" fill="#b45309" font-size="16" font-weight="700" font-family="Arial">Final: 76.16</text>
+          </svg>
+        </div>
+        <div class="card">
+          <h3>关键 checkpoint</h3>
+          <table>
+            <thead><tr><th>Model</th><th class="num">Average accuracy</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>checkpoint-25000</td><td class="num">65.35</td><td>早期训练</td></tr>
+              <tr><td>checkpoint-125000</td><td class="num">76.35</td><td>快速上升后进入平台</td></tr>
+              <tr><td>checkpoint-325000</td><td class="num best">77.93</td><td>当前最佳</td></tr>
+              <tr><td>checkpoint-475000</td><td class="num">77.76</td><td>接近最佳</td></tr>
+              <tr><td>checkpoint-675000</td><td class="num">76.81</td><td>后期略回落</td></tr>
+              <tr><td>final</td><td class="num">76.16</td><td>低于最佳 checkpoint</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="15 / 18">
+      <div class="label">ZhoBLiMP Details</div>
+      <h2>ZhoBLiMP 细分结果：按语言现象拆开看</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>Field accuracy（checkpoint-325000）</h3>
+          <table>
+            <thead><tr><th>Field</th><th class="num">Accuracy</th><th>评测重点</th></tr></thead>
+            <tbody>
+              <tr><td>fci_licensing</td><td class="num best">97.73</td><td>自由选择项在句中是否被正确许可，如“都、任意、谁都”等表达的使用条件。</td></tr>
+              <tr><td>topicalization</td><td class="num best">93.42</td><td>话题成分前置后，句子内部的语义关系和语序是否仍然成立。</td></tr>
+              <tr><td>control_raising</td><td class="num best">91.58</td><td>控制结构与提升结构中，主语和动作承担者之间的关系是否被正确区分。</td></tr>
+              <tr><td>relativization</td><td class="num">91.17</td><td>关系从句中修饰成分与中心词之间的依存关系是否自然。</td></tr>
+              <tr><td>question</td><td class="num">85.71</td><td>疑问句结构是否合乎中文语序和提问方式。</td></tr>
+              <tr><td>BA</td><td class="num">84.95</td><td>“把”字句中宾语、动词和结果成分的组合是否合理。</td></tr>
+              <tr><td>argument_structure</td><td class="num">73.38</td><td>谓词需要哪些参与成分，以及这些成分是否放在合适位置。</td></tr>
+              <tr><td>classifier</td><td class="num">71.11</td><td>名词与量词之间的搭配是否符合中文习惯。</td></tr>
+              <tr><td>npi_licensing</td><td class="num">69.63</td><td>否定极性词是否出现在合适语境中，尤其是否有否定或限制性环境支持。</td></tr>
+              <tr><td>quantifiers</td><td class="num">62.17</td><td>数量词与句子其他成分之间的范围关系和搭配是否正确。</td></tr>
+              <tr><td>passive</td><td class="num bad">48.25</td><td>被动句中施事、受事和动词结果之间的关系是否清楚。</td></tr>
+              <tr><td>anaphor</td><td class="num bad">42.22</td><td>反身代词或代词是否指向正确对象，尤其是“自己”等指代关系。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>UID-level extremes</h3>
+          <table>
+            <thead><tr><th>类别</th><th>UID</th><th>直观含义</th><th class="num">Accuracy</th></tr></thead>
+            <tbody>
+              <tr><td>Strong</td><td>BA_duplicate_argument</td><td>“把”字句中重复宾语</td><td class="num best">100.00</td></tr>
+              <tr><td>Strong</td><td>BA_meiba</td><td>“没把”这类结构</td><td class="num best">100.00</td></tr>
+              <tr><td>Strong</td><td>classifier_noun_subj</td><td>名词和量词搭配</td><td class="num best">100.00</td></tr>
+              <tr><td>Strong</td><td>control_modal_vs_raising_modal</td><td>判断动作由谁发出</td><td class="num best">100.00</td></tr>
+              <tr><td>Weak</td><td>anaphor_number_agreement</td><td>“自己”与人数是否匹配</td><td class="num bad">0.00</td></tr>
+              <tr><td>Weak</td><td>BA_verb_le_b</td><td>“把”字句和“了”的搭配</td><td class="num bad">0.00</td></tr>
+              <tr><td>Weak</td><td>passive_agent_deletion_long_left</td><td>省略施事的长被动句</td><td class="num bad">0.00</td></tr>
+              <tr><td>Weak</td><td>passive_agent_deletion_long_right_a</td><td>另一类长被动句</td><td class="num bad">0.00</td></tr>
+              <tr><td>Weak</td><td>question_V_not_VP_2</td><td>“V 不 VP”形式的疑问句</td><td class="num bad">1.67</td></tr>
+            </tbody>
+          </table>
+          <div class="note warning">
+            总分只能说明大概水平；拆开看之后可以发现，模型对“把”字句、量词、疑问句掌握得还可以，但在“自己/他指谁”和被动句上仍然容易出错。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="16 / 18">
+      <div class="label">Encoder Results</div>
+      <h2>Encoder CLUE 评估结果：图文表格结合</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>四个任务分别在看什么</h3>
+          <div class="bar-chart">
+            <div class="bar-row"><span>AFQMC</span><div class="bar-track"><div class="bar-fill" style="--value:68.9759"></div></div><span>68.98%</span></div>
+            <div class="bar-row"><span>OCNLI</span><div class="bar-track"><div class="bar-fill" style="--value:59.8983"></div></div><span>59.90%</span></div>
+            <div class="bar-row"><span>TNEWS</span><div class="bar-track"><div class="bar-fill" style="--value:53.9800"></div></div><span>53.98%</span></div>
+            <div class="bar-row"><span>CLUEWSC2020</span><div class="bar-track"><div class="bar-fill" style="--value:64.4737"></div></div><span>64.47%</span></div>
+          </div>
+          <table>
+            <thead><tr><th>Task</th><th>分数含义</th><th>例子</th></tr></thead>
+            <tbody>
+              <tr><td>AFQMC</td><td>判断两个问题是不是同一个意思。</td><td>“花呗如何还款”和“花呗怎么还”。</td></tr>
+              <tr><td>OCNLI</td><td>判断一句话能不能推出另一句话。</td><td>“有人在弹吉他”推出“有人在演奏乐器”。</td></tr>
+              <tr><td>TNEWS</td><td>根据新闻标题判断主题。</td><td>财经、体育、科技等。</td></tr>
+              <tr><td>CLUEWSC2020</td><td>判断代词指向谁。</td><td>“他”到底指“小明”还是“小刚”。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>各项得分</h3>
+          <table>
+            <thead><tr><th>Task</th><th class="num">Accuracy</th><th class="num">F1</th><th class="num">MCC</th></tr></thead>
+            <tbody>
+              <tr><td>AFQMC</td><td class="num">0.6897590361</td><td class="num bad">0.0103473762</td><td class="num bad">0.0200033554</td></tr>
+              <tr><td>OCNLI</td><td class="num">0.5989830508</td><td class="num">—</td><td class="num">—</td></tr>
+              <tr><td>TNEWS</td><td class="num">0.5398000000</td><td class="num">—</td><td class="num">—</td></tr>
+              <tr><td>CLUEWSC2020</td><td class="num">0.6447368421</td><td class="num">0.7731092437</td><td class="num">0.1167193246</td></tr>
+            </tbody>
+          </table>
+          <div class="note warning">
+            Accuracy 是答对比例；F1 更关注模型有没有找出“是”的那一类；MCC 可以看出模型是不是只会猜一个答案。这里 AFQMC 的正确率看起来不低，但 F1 和 MCC 很低，说明模型可能经常把“相似问题”漏掉。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-page="17 / 18">
+      <div class="label">Raw Evaluation Data</div>
+      <h2>补充：Decoder checkpoint 完整结果表</h2>
+      <table>
+        <thead><tr><th>Model</th><th class="num">Acc.</th><th>Model</th><th class="num">Acc.</th><th>Model</th><th class="num">Acc.</th></tr></thead>
+        <tbody>
+          <tr><td>25k</td><td class="num">65.35</td><td>250k</td><td class="num">75.62</td><td>475k</td><td class="num">77.76</td></tr>
+          <tr><td>50k</td><td class="num">70.71</td><td>275k</td><td class="num">75.20</td><td>500k</td><td class="num">77.52</td></tr>
+          <tr><td>75k</td><td class="num">71.62</td><td>300k</td><td class="num">75.99</td><td>525k</td><td class="num">76.32</td></tr>
+          <tr><td>100k</td><td class="num">74.77</td><td>325k</td><td class="num best">77.93</td><td>550k</td><td class="num">76.91</td></tr>
+          <tr><td>125k</td><td class="num">76.35</td><td>350k</td><td class="num">76.02</td><td>575k</td><td class="num">76.59</td></tr>
+          <tr><td>150k</td><td class="num">75.11</td><td>375k</td><td class="num">76.05</td><td>600k</td><td class="num">76.74</td></tr>
+          <tr><td>175k</td><td class="num">75.29</td><td>400k</td><td class="num">76.71</td><td>625k</td><td class="num">76.77</td></tr>
+          <tr><td>200k</td><td class="num">75.66</td><td>425k</td><td class="num">77.68</td><td>650k</td><td class="num">75.69</td></tr>
+          <tr><td>225k</td><td class="num">76.27</td><td>450k</td><td class="num">76.05</td><td>675k</td><td class="num">76.81</td></tr>
+          <tr><td colspan="4">final</td><td class="num" colspan="2">76.16</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="slide" data-page="18 / 18">
+      <div class="label">Retrospective</div>
+      <h2>提升空间和分析复盘</h2>
+      <div class="grid two">
+        <div class="card">
+          <h3>当前问题</h3>
+          <ul>
+            <li>Decoder 最佳 checkpoint 不是 final，说明训练后期可能出现评估回落。</li>
+            <li>Encoder 在 AFQMC 上可能经常猜同一类，所以正确率看起来还行，但细看并不稳定。</li>
+            <li>历史 encoder checkpoint loss 没有完整持久记录，影响训练过程分析。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>后续改进</h3>
+          <ul>
+            <li>增强指代建模能力，重点改善 anaphor 和 CLUEWSC2020 中“代词指谁”的判断。</li>
+            <li>强化被动句和长距离依赖学习，减少 passive 相关结构的系统性错误。</li>
+            <li>为 AFQMC 加强句对语义匹配能力，避免模型只依赖表面词重合或固定类别偏好。</li>
+            <li>提高 encoder 表示的稳定性，让同义改写、推理关系和主题分类都能获得更一致的句子表示。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const deck = document.getElementById("deck");
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    function currentIndex() {
+      const top = deck.scrollTop;
+      let best = 0;
+      let distance = Infinity;
+      slides.forEach((slide, index) => {
+        const current = Math.abs(slide.offsetTop - top);
+        if (current < distance) {
+          best = index;
+          distance = current;
+        }
+      });
+      return best;
+    }
+    function go(delta) {
+      const next = Math.max(0, Math.min(slides.length - 1, currentIndex() + delta));
+      slides[next].scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    window.addEventListener("keydown", (event) => {
+      if (["ArrowDown", "PageDown", " "].includes(event.key)) { event.preventDefault(); go(1); }
+      if (["ArrowUp", "PageUp"].includes(event.key)) { event.preventDefault(); go(-1); }
+      if (event.key === "Home") { event.preventDefault(); slides[0].scrollIntoView({ behavior: "smooth", block: "start" }); }
+      if (event.key === "End") { event.preventDefault(); slides[slides.length - 1].scrollIntoView({ behavior: "smooth", block: "start" }); }
+    });
+  </script>
+</body>
+</html>

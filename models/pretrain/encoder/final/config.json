@@ -1,4 +1,5 @@
 {
+  "_name_or_path": "D:\\Desktop\\babylm\\models\\pretrain\\encoder\\final",
   "architectures": [
     "BertForMaskedLM"
   ],
