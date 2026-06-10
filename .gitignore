@@ -5,6 +5,7 @@ train-raw.txt
 train-formatted.txt
 __pycache__
 checkpoint*/
-!models/encoder/final
-!models/decoder/final
+!models/pretrain/encoder/final
+!models/pretrain/decoder/final
+!models/pretrain/decoder/checkpoint-325000
 /outputs
