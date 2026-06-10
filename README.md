@@ -12,9 +12,13 @@ This project participates in the [CN BabyLM Challenge](https://chinese-babylm.gi
 .
 +-- configs/                  # Model/config files
 +-- eval-pipeline/            # Chinese BabyLM evaluation pipeline
-+-- models/pretrain/          # Saved checkpoints and final models
-|   +-- decoder/
-|   +-- encoder/
++-- models/                   # Saved checkpoints and final models
+|   +-- decoder-causal/
+|   +-- encoder-mlm/
+|   +-- elc-bert/
+|   +-- gpt-bert/
+|   +-- cwt-bert/
+|   +-- mntp-bert/
 +-- preprocess/               # Dataset tokenization/cache script
 +-- pretraining/              # Decoder and encoder pretraining scripts
 +-- scripts/                  # Reproduction and evaluation scripts
@@ -33,6 +37,13 @@ pretraining backbones:
 - Encoder: `pretraining/encoder/train.py`
   - BERT-style masked language model.
   - Used for CLUE-style downstream fine-tuning evaluation.
+- CWT-BERT: `pretraining/train_encoder_cwt_bert.py`
+  - Contrastive weight tying objective with in-batch negative sampling.
+  - Saves under `models/cwt-bert`.
+- MNTP-BERT: `pretraining/train_encoder_mntp_bert.py`
+  - Masked next-token prediction objective from "GPT or BERT: why not both?".
+  - Masks the current token and predicts it from the previous position.
+  - Saves under `models/mntp-bert`.
 
 The full reproduction flow is:
 
@@ -116,7 +127,7 @@ The preprocessing contract is:
 ### 2. Train the Decoder
 
 ```powershell
-python .\pretraining\decoder\train.py
+python .\pretraining\train_decoder_causal.py
 ```
 
 Default decoder settings:
@@ -133,8 +144,8 @@ Default decoder settings:
 
 Outputs are saved under:
 
-- Checkpoints: `models/pretrain/decoder/checkpoint-*`
-- Final model: `models/pretrain/decoder/final`
+- Checkpoints: `models/decoder-causal/checkpoint-*`
+- Final model: `models/decoder-causal/final`
 - Logs directory: `logs/decoder_pretrain`
 
 If checkpoint folders already exist, the script resumes from the latest
@@ -143,7 +154,7 @@ If checkpoint folders already exist, the script resumes from the latest
 ### 3. Train the Encoder
 
 ```powershell
-python .\pretraining\encoder\train.py
+python .\pretraining\train_encoder_mlm.py
 ```
 
 Default encoder settings:
@@ -162,13 +173,13 @@ Default encoder settings:
 
 Outputs are saved under:
 
-- Checkpoints: `models/pretrain/encoder/checkpoint-*`
-- Final model: `models/pretrain/encoder/final`
+- Checkpoints: `models/encoder-mlm/checkpoint-*`
+- Final model: `models/encoder-mlm/final`
 - Logs directory: `logs/encoder_pretrain`
 
 Encoder training is intentionally open-ended. Press `Ctrl+C` to stop; the
 script catches the interrupt, saves the current model to
-`models/pretrain/encoder/final`, and writes `trainer_state.json` with the
+`models/encoder-mlm/final`, and writes `trainer_state.json` with the
 current `global_step`.
 
 Each encoder checkpoint and final save contains:
@@ -180,7 +191,7 @@ Each encoder checkpoint and final save contains:
 
 Resume behavior:
 
-- If `models/pretrain/encoder/final/trainer_state.json` exists, training
+- If `models/encoder-mlm/final/trainer_state.json` exists, training
   resumes from `final` and continues counting from its saved `global_step`.
 - Otherwise, training resumes from the latest `checkpoint-*` directory.
 - Checkpoint saving always uses the global step modulo `SAVE_STEPS`, so if
@@ -192,45 +203,43 @@ Resume behavior:
 Evaluate the final decoder with ZhoBLiMP zero-shot causal LM scoring:
 
 ```powershell
-bash .\scripts\eval_nlu_decoder.sh
+.\evaluation.bat
 ```
 
 Evaluate the final encoder with fine-tuning:
 
 ```powershell
-bash .\scripts\eval_nlu_encoder.sh
+.\evaluation.bat
 ```
 
 Evaluate the final encoder with ZhoBLiMP zero-shot MLM scoring:
 
 ```powershell
-.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python
+.\evaluation.bat
 ```
 
 The default model paths are:
 
-- Decoder: `models/pretrain/decoder/final`
-- Encoder: `models/pretrain/encoder/final`
+- Decoder: `models/decoder-causal/final`
+- Encoder: `models/encoder-mlm/final`
 
 You can also evaluate a specific checkpoint:
 
 ```powershell
-bash .\scripts\eval_nlu_decoder.sh models/pretrain/decoder/checkpoint-25000
-bash .\scripts\eval_nlu_encoder.sh models/pretrain/encoder/checkpoint-25000
-.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python -ModelDir .\models\pretrain\encoder\checkpoint-25000
+.\evaluation.bat
 ```
 
 Decoder evaluation accepts an optional evaluation-data path as the second
 argument:
 
 ```powershell
-bash .\scripts\eval_nlu_decoder.sh models/pretrain/decoder/final evaluation_data/full_eval
+.\evaluation\evaluate_zhoblimp.ps1 -ModelDir .\models\decoder-causal\final -DataDir .\evaluation_data\full_eval\zhoblimp -OutputDir .\eval-res\decoder-causal\final\zhoblimp
 ```
 
 Encoder evaluation accepts optional fine-tuning hyperparameters:
 
 ```powershell
-bash .\scripts\eval_nlu_encoder.sh models/pretrain/encoder/final 3e-5 64 5 5 42 128
+.\evaluation\evaluate_clue.ps1 -ModelDir .\models\encoder-mlm\final -LearningRate 3e-5 -BatchSize 64 -MaxEpochs 5 -WscEpochs 5 -Seed 42 -SequenceLength 128
 ```
 
 The encoder arguments are:
@@ -242,40 +251,74 @@ model_path learning_rate batch_size max_epochs wsc_epochs seed seq_len
 Encoder ZhoBLiMP evaluation accepts optional data and output paths:
 
 ```powershell
-.\pretraining\encoder\evaluate_zhoblimp.ps1 -Python python -ModelDir .\models\pretrain\encoder\final -DataDir .\evaluation_data\full_eval\zhoblimp -OutputDir .\pretraining\encoder\eval-results-zhoblimp
+.\evaluation\evaluate_zhoblimp.ps1 -ModelDir .\models\encoder-mlm\final -DataDir .\evaluation_data\full_eval\zhoblimp -OutputDir .\eval-res\encoder-mlm\final\zhoblimp
 ```
 
 For encoder fine-tuning, AFQMC and CLUEWSC2020 use `mcc` as the validation
 selection metric to reduce majority-class collapse; OCNLI and TNEWS use
 `accuracy`.
 
-## One-Command Pipeline
+## Training and Evaluation Entrypoints
 
-For a complete run, use:
-
-```powershell
-.\scripts\run_nlu_pipeline.ps1 -Python python
-```
-
-The pipeline executes:
-
-1. `python .\preprocess\cache_dataset.py`
-2. `python .\pretraining\decoder\train.py`
-3. `python .\pretraining\encoder\train.py`
-4. `bash .\scripts\eval_nlu_decoder.sh`
-5. `bash .\scripts\eval_nlu_encoder.sh`
-
-Because encoder pretraining runs until `Ctrl+C`, a full pipeline run will stay
-in step 3 until you interrupt encoder training. After the interrupt, the
-encoder final model is saved and the pipeline can continue to evaluation.
-
-You can skip stages when resuming:
+Prepare the tokenized training cache once:
 
 ```powershell
-.\scripts\run_nlu_pipeline.ps1 -Python python -SkipCache
-.\scripts\run_nlu_pipeline.ps1 -Python python -SkipCache -SkipDecoder
-.\scripts\run_nlu_pipeline.ps1 -Python python -SkipCache -SkipDecoder -SkipEncoder
+python .\preprocess\cache_dataset.py
 ```
+
+Start an interactive training menu:
+
+```powershell
+.\train.bat
+```
+
+Start an interactive evaluation menu:
+
+```powershell
+.\evaluation.bat
+```
+
+Encoder-style pretraining runs until `Ctrl+C`; after the interrupt, the final
+model is saved under the selected `models/<training-method>/final` directory.
+
+Run a self-contained experiment pipeline:
+
+```powershell
+.\experiment.bat
+```
+
+The experiment pipeline creates an isolated directory under
+`experiments/<experiment-name>/`, trains into
+`experiments/<experiment-name>/models/<training-method>/`, evaluates into
+`experiments/<experiment-name>/eval-res/<training-method>/`, and writes
+`summary.csv` plus `summary.md` at the experiment root. If the same experiment
+name and training method are reused, training resumes from the existing
+`checkpoint-*` or `final` folder in that experiment model directory.
+
+Non-interactive example:
+
+```powershell
+.\experiment.bat -ExperimentName exp-elc-001 -Method elc-bert -Eval both -Checkpoint final -Python python
+.\experiment.bat -ExperimentName exp-cwt-001 -Method cwt-bert -Eval both -Checkpoint best-loss -Python python
+.\experiment.bat -ExperimentName exp-mntp-001 -Method mntp-bert -Eval both -Checkpoint best-loss -Python python
+```
+
+For memory-heavy objectives such as ELC-BERT, pass a smaller training batch
+size:
+
+```powershell
+.\experiment.bat -ExperimentName exp-elc-001 -Method elc-bert -Eval both -Checkpoint best-loss -BatchSize 8 -Python python
+```
+
+Use the checkpoint with the lowest recorded training loss:
+
+```powershell
+.\experiment.bat -ExperimentName exp-elc-001 -Method elc-bert -Eval both -Checkpoint best-loss -Python python
+```
+
+`best-loss` reads `trainer_state.json` in each `checkpoint-*` and `final`
+directory, preferring `avg_loss` and falling back to `loss`. Checkpoints created
+before this metadata existed are ignored by the automatic best-loss selector.
 
 ## Hugging Face-Compatible Outputs
 
@@ -284,17 +327,17 @@ model weights, config files, and tokenizer files.
 
 Expected final outputs:
 
-- `models/pretrain/decoder/final/config.json`
-- `models/pretrain/decoder/final/model.safetensors`
-- `models/pretrain/decoder/final/tokenizer.model`
-- `models/pretrain/encoder/final/config.json`
-- `models/pretrain/encoder/final/model.safetensors`
-- `models/pretrain/encoder/final/tokenizer.model`
+- `models/decoder-causal/final/config.json`
+- `models/decoder-causal/final/model.safetensors`
+- `models/decoder-causal/final/tokenizer.model`
+- `models/encoder-mlm/final/config.json`
+- `models/encoder-mlm/final/model.safetensors`
+- `models/encoder-mlm/final/tokenizer.model`
 
 If a checkpoint was created before tokenizer export was added, attach tokenizer
 files manually:
 
 ```powershell
-python .\scripts\export_tokenizer.py --model_dir .\models\pretrain\decoder\checkpoint-25000
-python .\scripts\export_tokenizer.py --model_dir .\models\pretrain\encoder\checkpoint-25000
+python .\scripts\export_tokenizer.py --model_dir .\models\decoder-causal\checkpoint-25000
+python .\scripts\export_tokenizer.py --model_dir .\models\encoder-mlm\checkpoint-25000
 ```

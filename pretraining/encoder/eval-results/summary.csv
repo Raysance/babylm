@@ -1,5 +1,0 @@
-﻿"model","task","accuracy","f1","mcc","results_path"
-"final","afqmc","0.6897590361445783","0.010347376201034738","0.020003355438924245","D:\Desktop\babylm\pretraining\encoder\eval-results\final\main\finetune\afqmc\results.txt"
-"final","ocnli","0.5989830508474576",,,"D:\Desktop\babylm\pretraining\encoder\eval-results\final\main\finetune\ocnli\results.txt"
-"final","tnews","0.5398",,,"D:\Desktop\babylm\pretraining\encoder\eval-results\final\main\finetune\tnews\results.txt"
-"final","cluewsc2020","0.6447368421052632","0.773109243697479","0.11671932462722953","D:\Desktop\babylm\pretraining\encoder\eval-results\final\main\finetune\cluewsc2020\results.txt"

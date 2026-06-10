@@ -137,7 +137,11 @@ def compute_causal_results(args, model, dataloader, temperatures):
             for temp in subset_to_stats:
                 log_probs = F.log_softmax(logits / temp, dim=-1)
                 target_log_probs = torch.gather(log_probs, -1, sentence_dict[f"{prefix}_targets"].to(DEVICE).unsqueeze(-1)).squeeze(-1)
-                phrase_log_probs = torch.sum(target_log_probs * sentence_dict[f"{prefix}_phrase_mask"].to(DEVICE), dim=1)
+                phrase_mask = sentence_dict[f"{prefix}_phrase_mask"].to(DEVICE)
+                phrase_log_probs = torch.sum(target_log_probs * phrase_mask, dim=1)
+                if getattr(args, "normalize_scores", False):
+                    phrase_lengths = phrase_mask.sum(dim=1).clamp(min=1)
+                    phrase_log_probs = phrase_log_probs / phrase_lengths
                 all_log_probs[temp].append(phrase_log_probs.cpu())
 
         if "wug" in args.task:
@@ -222,7 +226,11 @@ def compute_mlm_results(args, model, dataloader, temperatures):
                 for examples_per_batch in sentence_dict[f'{prefix}_examples_per_batch']:
                     start_idx = curr_idx
                     end_idx = curr_idx + examples_per_batch
-                    summed_log_probs.append(torch.sum(concat_temp_log_probs[start_idx:end_idx]).item())
+                    span_log_probs = concat_temp_log_probs[start_idx:end_idx]
+                    if getattr(args, "normalize_scores", False):
+                        summed_log_probs.append(torch.mean(span_log_probs).item())
+                    else:
+                        summed_log_probs.append(torch.sum(span_log_probs).item())
                     curr_idx += examples_per_batch
                 all_log_probs[temp].append(torch.tensor(summed_log_probs))
 

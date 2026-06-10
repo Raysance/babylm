@@ -9,3 +9,4 @@ checkpoint*/
 !models/pretrain/decoder/final
 !models/pretrain/decoder/checkpoint-325000
 /outputs
+/experiments
